@@ -76,7 +76,7 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                 with st.spinner("La IA de Google está analizando la imagen..."):
                     try:
                         genai.configure(api_key=gemini_key)
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        model = genai.GenerativeModel('gemini-3.8-flash')
                         
                         prompt = """
                         Analiza este cartel de resultados electorales.
