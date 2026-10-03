@@ -15,7 +15,7 @@ st.set_page_config(
 
 # --- 1. BASE DE DATOS CENTRALIZADA (SQLite) ---
 def init_db():
-    conn = sqlite3.connect("votos_electorales_multiples.db")
+    conn = sqlite3.connect("votos_electorales_v2.db")
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS actas (
@@ -104,7 +104,7 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         mesa_num = str(data.get("mesa", "000000"))
                         clave = f"{mesa_num}_{eleccion_final}"
                         
-                        conn = sqlite3.connect("votos_electorales_multiples.db")
+                        conn = sqlite3.connect("votos_electorales_v2.db")
                         c = conn.cursor()
                         
                         c.execute('''
@@ -133,7 +133,7 @@ else:
     st.title("🏛️ Centro Electoral Regional")
     st.subheader("Tablero Central de Cómputo")
     
-    conn = sqlite3.connect("votos_electorales_multiples.db")
+    conn = sqlite3.connect("votos_electorales_v2.db")
     df_actas = pd.read_sql_query("SELECT * FROM actas", conn)
     df_votos = pd.read_sql_query("SELECT v.*, a.tipo_eleccion FROM votos v JOIN actas a ON v.acta_id = a.id", conn)
     conn.close()
