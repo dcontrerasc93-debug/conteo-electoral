@@ -150,7 +150,7 @@ def obtener_resumen_actas():
 # --- 3. MENÚ PRINCIPAL ---
 st.sidebar.title("🗳️ Centro Electoral Regional")
 rol = st.sidebar.radio("Navegación:", ["📱 Enviar Foto (Personero)", "📊 Tablero Central de Cómputo"])
-api_key = st.sidebar.text_input("OpenAI API Key:", type="password")
+api_key = st.secrets.get("OPENAI_API_KEY", "")
 
 
 # ==========================================
