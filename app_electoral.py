@@ -8,7 +8,7 @@ import json
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Conteo Electoral", layout="wide")
-st.title("🗳️ Conteo Electoral ")
+st.title("🗳️ Conteo Electoral")
 
 # --- 2. BASE DE DATOS LIGERA (SOLO TEXTO Y NÚMEROS) ---
 conn = sqlite3.connect('votos_electorales_v4.db', check_same_thread=False)
@@ -37,17 +37,17 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     buffer.seek(0)
     return Image.open(buffer)
 
-# --- 4. SECCIÓN DEL PERSONERO (SIN MOSTRAR FOTO EN PANTALLA) ---
+# --- 4. SECCIÓN DEL PERSONERO (SIN MOSTRAR FOTO EN PANTALLA NI ALMACENARLA) ---
 st.subheader("📷 Registro de Acta (Personeros)")
 
 foto = st.file_uploader("Selecciona o toma la foto del acta electoral", type=["jpg", "jpeg", "png"])
 
 if foto is not None:
     imagen_pil = Image.open(foto)
-    st.info("📷 Foto cargada correctamente en el sistema (sin previsualización de imagen).")
+    st.info("📷 Foto lista en memoria (no se mostrará ni se guardará en base de datos).")
     
     if st.button("🚀 Procesar Foto y Guardar Votos", type="primary"):
-        with st.spinner("Procesando lectura en 2 segundos..."):
+        with st.spinner("Procesando lectura..."):
             try:
                 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
                 if not api_key:
@@ -69,8 +69,14 @@ if foto is not None:
                 Si no estás seguro de algún valor pon 0.
                 """
                 
-                # Modelo oficial vigente
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                # Selección de modelo dinámica (Prioridad gemini-3.8-flash)
+                model_name = "gemini-3.8-flash"
+                try:
+                    model = genai.GenerativeModel(model_name)
+                except Exception:
+                    # Fallback a modelos estándar disponibles
+                    model_name = "gemini-3.5-flash-lite"
+                    model = genai.GenerativeModel(model_name)
                 
                 generation_config = genai.GenerationConfig(
                     temperature=0.1,
@@ -89,6 +95,7 @@ if foto is not None:
                 
                 datos = json.loads(res_text.strip())
                 
+                # Guardar estrictamente los datos extraídos (0 bytes de imagen guardados)
                 c.execute('''
                     INSERT OR REPLACE INTO actas (numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos)
                     VALUES (?, ?, ?, ?, ?)
@@ -101,7 +108,7 @@ if foto is not None:
                 ))
                 conn.commit()
                 
-                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} guardados!")
+                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} guardados con éxito!")
                 st.rerun()
                 
             except Exception as e:
