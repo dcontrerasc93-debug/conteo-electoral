@@ -97,8 +97,8 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         """
                         
                         response = model.generate_content([prompt, image])
-                        text_response = response.text.strip().replace("```json", "").replace("```", "")
-                        data = json.loads(text_response)
+                        text_response = response.text.strip().replace("json", "").replace("", "") # Limpia caracteres invisibles de salto de línea que rompen el JSON text_response = text_response.replace("\n", " ").replace("\r", " ")
+                        data = json.loads(text_response, strict=False)
                         
                         eleccion_final = data.get("tipo_eleccion", "GENERAL") if tipo_eleccion.startswith("Automatico") else tipo_eleccion
                         mesa_num = str(data.get("mesa", "000000"))
