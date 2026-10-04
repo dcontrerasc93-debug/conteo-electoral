@@ -10,8 +10,8 @@ import json
 st.set_page_config(page_title="Conteo Electoral", layout="wide")
 st.title("🗳️ Sistema de Conteo Electoral en Vivo")
 
-# --- 2. CONEXIÓN A BASE DE DATOS SQLITE CON ALMACENAMIENTO DE IMAGEN ---
-conn = sqlite3.connect('votos_electorales_v3.db', check_same_thread=False)
+# --- 2. BASE DE DATOS LIGERA (SOLO TEXTO Y NÚMEROS) ---
+conn = sqlite3.connect('votos_electorales_v4.db', check_same_thread=False)
 c = conn.cursor()
 
 c.execute('''
@@ -21,13 +21,12 @@ c.execute('''
         votos_partido_2 INTEGER,
         votos_blancos INTEGER,
         votos_nulos INTEGER,
-        imagen_blob BLOB,
         fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
 ''')
 conn.commit()
 
-# --- 3. OPTIMIZACIÓN DE IMAGEN ---
+# --- 3. OPTIMIZACIÓN DE IMAGEN PARA MINIMIZAR USO DE API ---
 def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     img = image_pil.copy()
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
@@ -36,7 +35,7 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG", quality=quality, optimize=True)
     buffer.seek(0)
-    return Image.open(buffer), buffer.getvalue()
+    return Image.open(buffer)
 
 # --- 4. SECCIÓN DEL PERSONERO (SUBIR FOTO Y PROCESAR) ---
 st.subheader("📷 Registro de Acta (Personeros)")
@@ -45,18 +44,18 @@ foto = st.file_uploader("Toma o sube la foto del acta electoral", type=["jpg", "
 
 if foto is not None:
     imagen_pil = Image.open(foto)
-    st.image(imagen_pil, caption="Foto del Acta Cargada", width=250)
+    st.image(imagen_pil, caption="Vista previa de foto", width=200)
     
-    if st.button("🚀 Procesar Foto y Guardar Acta", type="primary"):
-        with st.spinner("Leyendo datos del acta con Gemini en 2-3 segundos..."):
+    if st.button("🚀 Procesar Foto y Guardar Votos", type="primary"):
+        with st.spinner("Procesando datos en 2 segundos..."):
             try:
                 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
                 if not api_key:
-                    st.error("Error: No se encontró la GEMINI_API_KEY en los Secrets de Streamlit.")
+                    st.error("Error: No se encontró la GEMINI_API_KEY en los Secrets.")
                     st.stop()
                 
                 genai.configure(api_key=api_key)
-                img_opt, img_bytes = optimizar_imagen(imagen_pil)
+                img_opt = optimizar_imagen(imagen_pil)
                 
                 prompt = """
                 Analiza esta foto de acta electoral y devuelve ÚNICAMENTE un objeto JSON válido con este formato exacto:
@@ -70,43 +69,60 @@ if foto is not None:
                 Si no estás seguro de algún valor pon 0.
                 """
                 
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # Probar modelos 2.0 / 2.5 / 1.5 según disponibilidad
+                try:
+                    model = genai.GenerativeModel('gemini-2.0-flash')
+                except Exception:
+                    try:
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                    except Exception:
+                        model = genai.GenerativeModel('gemini-1.5-flash-8b')
+                
                 generation_config = genai.GenerationConfig(
                     temperature=0.1,
                     response_mime_type="application/json"
                 )
                 
                 response = model.generate_content([prompt, img_opt], generation_config=generation_config)
-                datos = json.loads(response.text)
                 
+                res_text = response.text.strip()
+                if res_text.startswith("```json"):
+                    res_text = res_text[7:]
+                if res_text.startswith("```"):
+                    res_text = res_text[3:]
+                if res_text.endswith("```"):
+                    res_text = res_text[:-3]
+                
+                datos = json.loads(res_text.strip())
+                
+                # Solo guardamos los números y el ID de mesa en la base de datos
                 c.execute('''
-                    INSERT OR REPLACE INTO actas (numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, imagen_blob)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO actas (numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos)
+                    VALUES (?, ?, ?, ?, ?)
                 ''', (
                     str(datos.get("numero_mesa", "Desconocida")),
                     int(datos.get("votos_partido_1", 0)),
                     int(datos.get("votos_partido_2", 0)),
-                    int(datos.get("votos_partido_1", 0)),
-                    int(datos.get("votos_nulos", 0)),
-                    sqlite3.Binary(img_bytes)
+                    int(datos.get("votos_blancos", 0)),
+                    int(datos.get("votos_nulos", 0))
                 ))
                 conn.commit()
                 
-                st.success(f"✅ ¡Acta de la Mesa N° {datos.get('numero_mesa')} guardada correctamente!")
+                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} guardados!")
                 st.rerun()
                 
             except Exception as e:
-                st.error(f"Error al procesar la imagen: {str(e)}")
+                st.error(f"Error al procesar: {str(e)}")
 
 st.markdown("---")
 
-# --- 5. RESULTADOS CONSOLIDADOS Y SELECCIÓN INTERACTIVA POR BOTÓN ---
+# --- 5. RESULTADOS CONSOLIDADOS Y CONSULTA INTERACTIVA POR MESA ---
 st.header("📊 Resultados Consolidados")
 
 df = pd.read_sql_query("SELECT numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, fecha_registro FROM actas", conn)
 
 if not df.empty:
-    # Métricas Globales
+    # Totales Globales
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Partido 1", f"{df['votos_partido_1'].sum():,}")
     col2.metric("Partido 2", f"{df['votos_partido_2'].sum():,}")
@@ -114,34 +130,33 @@ if not df.empty:
     col4.metric("Mesas Procesadas", len(df))
     
     st.markdown("---")
-    st.subheader("📋 Lista de Mesas Procesadas (Haz clic en una para ver su ventana de detalle)")
+    st.subheader("📋 Mesas Registradas (Haz clic para ver el detalle)")
 
-    # Presentación interactiva donde cada número de mesa es un BOTÓN clicable
+    # Botones por mesa que abren ventana emergente
     for index, row in df.iterrows():
-        col_btn, col_p1, col_p2, col_bn, col_f = st.columns([2, 2, 2, 2, 3])
+        col_btn, col_p1, col_p2, col_bn, col_f = st.columns([3, 2, 2, 2, 3])
         
-        # Al hacer clic en el número de mesa, abre la ventana modal (dialog)
         if col_btn.button(f"🔍 Mesa N° {row['numero_mesa']}", key=f"btn_{row['numero_mesa']}"):
             
-            # Modal emergente con el detalle de la mesa elegida
-            @st.dialog(f"🔎 Detalle de la Mesa N° {row['numero_mesa']}")
+            # Modal emergente con los resultados numéricos de esa mesa
+            @st.dialog(f"🔎 Conteo Exclusivo: Mesa N° {row['numero_mesa']}")
             def mostrar_detalle_mesa(mesa_id):
-                c.execute("SELECT votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, imagen_blob, fecha_registro FROM actas WHERE numero_mesa = ?", (mesa_id,))
+                c.execute("SELECT votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, fecha_registro FROM actas WHERE numero_mesa = ?", (mesa_id,))
                 res = c.fetchone()
                 if res:
-                    p1, p2, pb, pn, img_blob, fecha = res
+                    p1, p2, pb, pn, fecha = res
                     
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Partido 1", p1)
-                    m2.metric("Partido 2", p2)
-                    m3.metric("Blancos/Nulos", pb + pn)
+                    st.write(f"### Mesa N° {mesa_id}")
+                    m1, m2 = st.columns(2)
+                    m1.metric("Votos Partido 1", p1)
+                    m2.metric("Votos Partido 2", p2)
                     
-                    st.caption(f"Fecha de registro: {fecha}")
+                    m3, m4 = st.columns(2)
+                    m3.metric("Votos Blancos", pb)
+                    m4.metric("Votos Nulos", pn)
                     
-                    if img_blob:
-                        st.markdown("**Foto del Acta Original:**")
-                        imagen_mesa = Image.open(io.BytesIO(img_blob))
-                        st.image(imagen_mesa, use_column_width=True)
+                    st.divider()
+                    st.caption(f"Fecha/Hora de Registro: {fecha}")
             
             mostrar_detalle_mesa(str(row['numero_mesa']))
             
@@ -151,4 +166,4 @@ if not df.empty:
         col_f.caption(f"{row['fecha_registro']}")
 
 else:
-    st.info("Aún no se han registrado actas. Sube una foto arriba para comenzar el conteo.")
+    st.info("Aún no se han registrado actas. Sube una foto arriba para comenzar.")
