@@ -4,9 +4,10 @@ import sqlite3
 import google.generativeai as genai
 import json
 from PIL import Image
+import io
 from datetime import datetime
 
-# Configuración de la página
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
     page_title="Sistema Electoral Regional y Municipal",
     layout="wide",
@@ -15,7 +16,7 @@ st.set_page_config(
 
 # --- 1. BASE DE DATOS CENTRALIZADA (SQLite) ---
 def init_db():
-    conn = sqlite3.connect("votos_electorales_multiples.db")
+    conn = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS actas (
@@ -45,14 +46,22 @@ def init_db():
 
 init_db()
 
-# --- 2. CONFIGURACIÓN DE IA (Google Gemini Gratis) ---
-gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+# --- 2. OPTIMIZACIÓN DE IMAGEN (SOLO EN RAM) ---
+def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
+    img = image_pil.copy()
+    img.thumbnail(max_size, Image.Resampling.LANCZOS)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=quality, optimize=True)
+    buffer.seek(0)
+    return Image.open(buffer)
 
-# Menu lateral
+# --- 3. NAVEGACIÓN ---
 st.sidebar.title("Navegación")
 opcion_menu = st.sidebar.radio("Ir a:", ["📋 Enviar Foto (Personero)", "📊 Tablero Central de Cómputo"])
 
-# --- VISTA PERSONERO ---
+# --- VISTA PERSONERO (SIN MOSTRAR NI GUARDAR IMÁGENES) ---
 if opcion_menu == "📋 Enviar Foto (Personero)":
     st.header("📸 Registro de Cartel de Resultados")
     
@@ -63,20 +72,21 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
         ["Automatico (Detectar por IA)", "PRESIDENTE / GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
     )
     
-    foto = st.file_uploader("Capturar / Subir Foto del Cartel", type=["jpg", "jpeg", "png"])
+    foto = st.file_uploader("Capturar / Seleccionar Foto del Cartel", type=["jpg", "jpeg", "png"])
     
     if foto is not None:
-        image = Image.open(foto)
-        st.image(image, caption="Foto cargada", use_column_width=True)
+        imagen_pil = Image.open(foto)
+        st.info("📷 Foto cargada en memoria RAM (no se mostrará ni almacenará en el servidor).")
         
         if st.button("🚀 Procesar e Ingresar a Base de Datos Central", type="primary"):
+            gemini_key = st.secrets.get("GEMINI_API_KEY", "").strip()
             if not gemini_key:
                 st.error("Falta configurar la clave GEMINI_API_KEY en los Secrets de Streamlit.")
             else:
                 with st.spinner("La IA de Google está analizando la imagen..."):
                     try:
                         genai.configure(api_key=gemini_key)
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        img_opt = optimizar_imagen(imagen_pil)
                         
                         prompt = """
                         Analiza este cartel de resultados electorales.
@@ -96,15 +106,34 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         Responde UNICAMENTE con el JSON, sin marcas de markdown.
                         """
                         
-                        response = model.generate_content([prompt, image])
-                        text_response = response.text.strip().replace("```json", "").replace("```", "")
-                        data = json.loads(text_response)
+                        # Modelo oficial actualizado
+                        try:
+                            model = genai.GenerativeModel('gemini-2.5-flash')
+                        except Exception:
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                        
+                        generation_config = genai.GenerationConfig(
+                            temperature=0.1,
+                            response_mime_type="application/json"
+                        )
+                        
+                        response = model.generate_content([prompt, img_opt], generation_config=generation_config)
+                        
+                        res_text = response.text.strip()
+                        if res_text.startswith("```json"):
+                            res_text = res_text[7:]
+                        if res_text.startswith("```"):
+                            res_text = res_text[3:]
+                        if res_text.endswith("```"):
+                            res_text = res_text[:-3]
+                        
+                        data = json.loads(res_text.strip())
                         
                         eleccion_final = data.get("tipo_eleccion", "GENERAL") if tipo_eleccion.startswith("Automatico") else tipo_eleccion
                         mesa_num = str(data.get("mesa", "000000"))
                         clave = f"{mesa_num}_{eleccion_final}"
                         
-                        conn = sqlite3.connect("votos_electorales_multiples.db")
+                        conn = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
                         c = conn.cursor()
                         
                         c.execute('''
@@ -120,37 +149,30 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         conn.commit()
                         conn.close()
                         
-                        st.success("¡Acta procesada y guardada exitosamente en la base de datos central!")
+                        st.success(f"✅ ¡Mesa N° {mesa_num} ({eleccion_final}) procesada y guardada exitosamente!")
                         st.json(data)
                         
                     except sqlite3.IntegrityError:
-                        st.warning("⚠️ Esta mesa y tipo de elección ya fue registrada anteriormente.")
+                        st.warning("⚠️ Esta mesa y tipo de elección ya fueron registradas anteriormente.")
                     except Exception as e:
                         st.error(f"Error procesando la imagen: {e}")
 
-# --- VISTA TABLERO CENTRAL ---
+# --- VISTA TABLERO CENTRAL DE CÓMPUTO ---
 else:
-    st.title("🏛️ Centro Electoral Regional")
-    st.subheader("Tablero Central de Cómputo")
+    st.title("🏛️ Centro Electoral Regional y Municipal")
     
-    conn = sqlite3.connect("votos_electorales_multiples.db")
+    conn = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
     df_actas = pd.read_sql_query("SELECT * FROM actas", conn)
-    df_votos = pd.read_sql_query("SELECT v.*, a.tipo_eleccion FROM votos v JOIN actas a ON v.acta_id = a.id", conn)
+    df_votos = pd.read_sql_query("SELECT v.*, a.tipo_eleccion, a.mesa, a.departamento, a.provincia, a.distrito FROM votos v JOIN actas a ON v.acta_id = a.id", conn)
     conn.close()
-    
-    elecciones = ["GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
-    tabs = st.tabs([f"🏛️ {e}" for e in elecciones])
-    
-    for idx, e in enumerate(elecciones):
-        with tabs[idx]:
-            st.header(f"Resultados Consolidados: {e}")
-            df_sub = df_votos[df_votos["tipo_eleccion"].str.contains(e, case=False, na=False)]
-            if not df_sub.empty:
-                res = df_sub.groupby("partido")["votos"].sum().reset_index().sort_values(by="votos", ascending=False)
-                st.dataframe(res, use_container_width=True)
-                st.bar_chart(res.set_index("partido"))
-            else:
-                st.info(f"Aún no hay votos registrados para {e}.")
 
-    st.subheader("📋 Lista General de Mesas y Elecciones Registradas")
-    st.dataframe(df_actas, use_container_width=True)
+    # --- BOTÓN DE CONTEO TOTAL GENERAL ---
+    st.subheader("📊 Cómputo General")
+    col_btn, col_blank = st.columns([1, 3])
+    
+    with col_btn:
+        if st.button("🧮 Ver Conteo Total de Votos Emitidos", type="primary", use_container_width=True):
+            @st.dialog("📊 Conteo Total Nacional / Regional")
+            def mostrar_totales_globales():
+                if not df_votos.empty:
+                    st.write("### 🗳
