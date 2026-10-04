@@ -58,17 +58,17 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     return Image.open(buffer)
 
 # --- 3. NAVEGACIÓN ---
-st.sidebar.title("Navegación")
-opcion_menu = st.sidebar.radio("Ir a:", ["📋 Enviar Foto (Personero)", "📊 Tablero Central de Cómputo"])
+st.sidebar.title("Navegacion")
+opcion_menu = st.sidebar.radio("Ir a:", ["Enviar Foto (Personero)", "Tablero Central de Computo"])
 
 # --- VISTA PERSONERO (SIN MOSTRAR NI GUARDAR IMÁGENES) ---
-if opcion_menu == "📋 Enviar Foto (Personero)":
-    st.header("📸 Registro de Cartel de Resultados")
+if opcion_menu == "Enviar Foto (Personero)":
+    st.header("Registro de Cartel de Resultados")
     
-    personero = st.text_input("Código / Nombre del Personero:", value="Personero1")
+    personero = st.text_input("Codigo / Nombre del Personero:", value="Personero1")
     
     tipo_eleccion = st.selectbox(
-        "Seleccione Tipo de Elección:",
+        "Seleccione Tipo de Eleccion:",
         ["Automatico (Detectar por IA)", "PRESIDENTE / GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
     )
     
@@ -76,21 +76,21 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
     
     if foto is not None:
         imagen_pil = Image.open(foto)
-        st.info("📷 Foto cargada en memoria RAM (no se mostrará ni almacenará en el servidor).")
+        st.info("Foto cargada en memoria RAM (no se mostrara ni almacenara en el servidor).")
         
-        if st.button("🚀 Procesar e Ingresar a Base de Datos Central", type="primary"):
+        if st.button("Procesar e Ingresar a Base de Datos Central", type="primary"):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "").strip()
             if not gemini_key:
                 st.error("Falta configurar la clave GEMINI_API_KEY en los Secrets de Streamlit.")
             else:
-                with st.spinner("La IA de Google está analizando la imagen..."):
+                with st.spinner("La IA de Google esta analizando la imagen..."):
                     try:
                         genai.configure(api_key=gemini_key)
                         img_opt = optimizar_imagen(imagen_pil)
                         
                         prompt = """
                         Analiza este cartel de resultados electorales.
-                        Extrae la siguiente información en formato JSON estricto:
+                        Extrae la siguiente informacion en formato JSON estricto:
                         {
                             "mesa": "numero de mesa o Desconocido",
                             "departamento": "nombre o Desconocido",
@@ -106,7 +106,6 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         Responde UNICAMENTE con el JSON, sin marcas de markdown.
                         """
                         
-                        # Modelo oficial actualizado
                         try:
                             model = genai.GenerativeModel('gemini-2.5-flash')
                         except Exception:
@@ -149,17 +148,17 @@ if opcion_menu == "📋 Enviar Foto (Personero)":
                         conn.commit()
                         conn.close()
                         
-                        st.success(f"✅ ¡Mesa N° {mesa_num} ({eleccion_final}) procesada y guardada exitosamente!")
+                        st.success(f"Mesa N {mesa_num} ({eleccion_final}) procesada y guardada exitosamente!")
                         st.json(data)
                         
                     except sqlite3.IntegrityError:
-                        st.warning("⚠️ Esta mesa y tipo de elección ya fueron registradas anteriormente.")
+                        st.warning("Esta mesa y tipo de eleccion ya fueron registradas anteriormente.")
                     except Exception as e:
                         st.error(f"Error procesando la imagen: {e}")
 
 # --- VISTA TABLERO CENTRAL DE CÓMPUTO ---
 else:
-    st.title("🏛️ Centro Electoral Regional y Municipal")
+    st.title("Centro Electoral Regional y Municipal")
     
     conn = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
     df_actas = pd.read_sql_query("SELECT * FROM actas", conn)
@@ -167,12 +166,80 @@ else:
     conn.close()
 
     # --- BOTÓN DE CONTEO TOTAL GENERAL ---
-    st.subheader("📊 Cómputo General")
+    st.subheader("Computo General")
     col_btn, col_blank = st.columns([1, 3])
     
     with col_btn:
-        if st.button("🧮 Ver Conteo Total de Votos Emitidos", type="primary", use_container_width=True):
-            @st.dialog("📊 Conteo Total Nacional / Regional")
+        if st.button("Ver Conteo Total de Votos Emitidos", type="primary", use_container_width=True):
+            @st.dialog("Conteo Total Nacional / Regional")
             def mostrar_totales_globales():
                 if not df_votos.empty:
-                    st.write("### 🗳
+                    st.write("### Total de Votos por Eleccion y Partido")
+                    for e in ["GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]:
+                        st.markdown(f"#### {e}")
+                        df_sub = df_votos[df_votos["tipo_eleccion"].str.contains(e, case=False, na=False)]
+                        if not df_sub.empty:
+                            totales = df_sub.groupby("partido")["votos"].sum().reset_index().sort_values(by="votos", ascending=False)
+                            st.dataframe(totales, use_container_width=True)
+                            st.caption(f"Total Votos Emitidos en este cargo: {totales['votos'].sum():,}")
+                        else:
+                            st.info(f"Sin registros para {e}.")
+                        st.divider()
+                else:
+                    st.info("No hay datos cargados todavia.")
+            
+            mostrar_totales_globales()
+
+    st.markdown("---")
+
+    # --- PESTAÑAS POR TIPO DE ELECCIÓN ---
+    elecciones = ["GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
+    tabs = st.tabs([f"{e}" for e in elecciones])
+    
+    for idx, e in enumerate(elecciones):
+        with tabs[idx]:
+            st.header(f"Resultados Consolidados: {e}")
+            df_sub = df_votos[df_votos["tipo_eleccion"].str.contains(e, case=False, na=False)]
+            if not df_sub.empty:
+                res = df_sub.groupby("partido")["votos"].sum().reset_index().sort_values(by="votos", ascending=False)
+                st.dataframe(res, use_container_width=True)
+                st.bar_chart(res.set_index("partido"))
+            else:
+                st.info(f"Aun no hay votos registrados para {e}.")
+
+    st.markdown("---")
+
+    # --- LISTA GENERAL DE MESAS CON VISTA DETALLADA AL HACER CLIC ---
+    st.subheader("Mesas Registradas (Haz clic en una mesa para ver su desglose)")
+    
+    if not df_actas.empty:
+        for idx, row in df_actas.iterrows():
+            c1, c2, c3, c4 = st.columns([2, 3, 3, 2])
+            
+            # Botón interactivo por mesa
+            if c1.button(f"Mesa N {row['mesa']}", key=f"mesa_btn_{row['id']}"):
+                
+                @st.dialog(f"Detalle de Acta: Mesa N {row['mesa']}")
+                def mostrar_detalle_acta(acta_id, mesa_num, tipo_e):
+                    st.write(f"### Mesa N {mesa_num}")
+                    st.write(f"**Tipo de Eleccion:** {tipo_e}")
+                    st.write(f"**Ubicacion:** {row['departamento']} - {row['provincia']} - {row['distrito']}")
+                    st.write(f"**Personero:** {row['personero']} | **Fecha:** {row['fecha_hora']}")
+                    st.divider()
+                    
+                    conn_dialog = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
+                    df_votos_acta = pd.read_sql_query("SELECT partido, votos FROM votos WHERE acta_id = ?", conn_dialog, params=(acta_id,))
+                    conn_dialog.close()
+                    
+                    if not df_votos_acta.empty:
+                        st.dataframe(df_votos_acta.sort_values(by="votos", ascending=False), use_container_width=True)
+                    else:
+                        st.info("Sin detalle de votos grabado para esta mesa.")
+                
+                mostrar_detalle_acta(row['id'], row['mesa'], row['tipo_eleccion'])
+                
+            c2.write(f"**Eleccion:** {row['tipo_eleccion']}")
+            c3.write(f"**Lugar:** {row['departamento']} / {row['provincia']} / {row['distrito']}")
+            c4.caption(f"{row['fecha_hora']}")
+    else:
+        st.info("Aun no se han ingresado actas electorales.")
