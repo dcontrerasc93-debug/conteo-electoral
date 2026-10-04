@@ -43,18 +43,33 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     buffer.seek(0)
     return Image.open(buffer)
 
-# --- 4. FUNCIÓN PARA OBTENER UN MODELO VIGENTE AUTOMÁTICAMENTE ---
-def obtener_modelo_activo():
+# --- 4. FUNCIÓN PARA OBTENER EL MODELO GEMINI VIGENTE ---
+def obtener_modelo():
+    # Intentar usar el modelo recomendado gemini-3.8-flash
+    modelos_a_probar = [
+        'gemini-3.8-flash',
+        'gemini-1.5-flash',
+        'gemini-2.0-flash-exp'
+    ]
+    
+    for mod in modelos_a_probar:
+        try:
+            return genai.GenerativeModel(mod)
+        except Exception:
+            continue
+            
+    # Fallback dinámico leyendo la lista oficial permitida en tu API Key
     try:
-        modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Buscar el mejor modelo flash disponible en tu cuenta
-        for m in modelos:
-            if 'flash' in m.lower():
-                return genai.GenerativeModel(m)
-        return genai.GenerativeModel(modelos[0])
+        modelos_disponibles = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        if modelos_disponibles:
+            return genai.GenerativeModel(modelos_disponibles[0])
     except Exception:
-        # Respaldo en caso de error en listado
-        return genai.GenerativeModel('gemini-2.5-flash')
+        pass
+        
+    return genai.GenerativeModel('gemini-3.8-flash')
 
 # --- 5. SECCIÓN DEL PERSONERO (SIN PREVISUALIZACIÓN NI GUARDADO DE IMAGEN) ---
 st.subheader("📷 Registro de Acta Electoral")
@@ -66,7 +81,7 @@ if foto is not None:
     st.info("📷 Foto cargada en memoria RAM. Cero imágenes guardadas.")
     
     if st.button("🚀 Procesar Foto y Extraer Todos los Cargos", type="primary"):
-        with st.spinner("Leyendo resultados de los 4 cargos electorales..."):
+        with st.spinner("Procesando lectura con Gemini..."):
             try:
                 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
                 if not api_key:
@@ -95,7 +110,7 @@ if foto is not None:
                 Si un cargo o valor no es legible o no está presente, asigna 0.
                 """
                 
-                model = obtener_modelo_activo()
+                model = obtener_modelo()
                 
                 generation_config = genai.GenerationConfig(
                     temperature=0.1,
@@ -135,7 +150,7 @@ if foto is not None:
                 ))
                 conn.commit()
                 
-                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} registrados!")
+                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} registrados correctamente!")
                 st.rerun()
                 
             except Exception as e:
