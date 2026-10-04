@@ -1,221 +1,156 @@
 import streamlit as st
-import google.generativeai as genai
-import sqlite3
 import pandas as pd
-from PIL import Image
-import io
+import sqlite3
+import google.generativeai as genai
 import json
+from PIL import Image
+from datetime import datetime
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Conteo Electoral Regional y Municipal", layout="wide")
-st.title("🗳️ Sistema de Conteo Electoral Completo")
+# Configuración de la página
+st.set_page_config(
+    page_title="Sistema Electoral Regional y Municipal",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- 2. BASE DE DATOS LIGERA (SOLO NÚMEROS Y TEXTO) ---
-conn = sqlite3.connect('votos_electorales_v5.db', check_same_thread=False)
-c = conn.cursor()
+# --- 1. BASE DE DATOS CENTRALIZADA (SQLite) ---
+def init_db():
+    conn = sqlite3.connect("votos_electorales_multiples.db")
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS actas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clave_unica TEXT UNIQUE,
+            mesa TEXT,
+            tipo_eleccion TEXT,
+            departamento TEXT,
+            provincia TEXT,
+            distrito TEXT,
+            emitidos INTEGER,
+            personero TEXT,
+            fecha_hora TEXT
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS votos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            acta_id INTEGER,
+            partido TEXT,
+            votos INTEGER,
+            FOREIGN KEY(acta_id) REFERENCES actas(id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS actas (
-        numero_mesa TEXT PRIMARY KEY,
-        pres_reg_p1 INTEGER DEFAULT 0,
-        pres_reg_p2 INTEGER DEFAULT 0,
-        cons_reg_p1 INTEGER DEFAULT 0,
-        cons_reg_p2 INTEGER DEFAULT 0,
-        alc_prov_p1 INTEGER DEFAULT 0,
-        alc_prov_p2 INTEGER DEFAULT 0,
-        alc_dist_p1 INTEGER DEFAULT 0,
-        alc_dist_p2 INTEGER DEFAULT 0,
-        votos_blancos INTEGER DEFAULT 0,
-        votos_nulos INTEGER DEFAULT 0,
-        fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+init_db()
+
+# --- 2. CONFIGURACIÓN DE IA (Google Gemini Gratis) ---
+gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+
+# Menu lateral
+st.sidebar.title("Navegación")
+opcion_menu = st.sidebar.radio("Ir a:", ["📋 Enviar Foto (Personero)", "📊 Tablero Central de Cómputo"])
+
+# --- VISTA PERSONERO ---
+if opcion_menu == "📋 Enviar Foto (Personero)":
+    st.header("📸 Registro de Cartel de Resultados")
+    
+    personero = st.text_input("Código / Nombre del Personero:", value="Personero1")
+    
+    tipo_eleccion = st.selectbox(
+        "Seleccione Tipo de Elección:",
+        ["Automatico (Detectar por IA)", "PRESIDENTE / GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
     )
-''')
-conn.commit()
-
-# --- 3. OPTIMIZACIÓN DE IMAGEN EN MEMORIA RAM (CERO GUARDADO EN DISCO) ---
-def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
-    img = image_pil.copy()
-    img.thumbnail(max_size, Image.Resampling.LANCZOS)
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=quality, optimize=True)
-    buffer.seek(0)
-    return Image.open(buffer)
-
-# --- 4. FUNCIÓN PARA OBTENER EL MODELO GEMINI VIGENTE ---
-def obtener_modelo():
-    # Intentar usar el modelo recomendado gemini-3.8-flash
-    modelos_a_probar = [
-        'gemini-3.8-flash',
-        'gemini-1.5-flash',
-        'gemini-2.0-flash-exp'
-    ]
     
-    for mod in modelos_a_probar:
-        try:
-            return genai.GenerativeModel(mod)
-        except Exception:
-            continue
-            
-    # Fallback dinámico leyendo la lista oficial permitida en tu API Key
-    try:
-        modelos_disponibles = [
-            m.name for m in genai.list_models() 
-            if 'generateContent' in m.supported_generation_methods
-        ]
-        if modelos_disponibles:
-            return genai.GenerativeModel(modelos_disponibles[0])
-    except Exception:
-        pass
+    foto = st.file_uploader("Capturar / Subir Foto del Cartel", type=["jpg", "jpeg", "png"])
+    
+    if foto is not None:
+        image = Image.open(foto)
+        st.image(image, caption="Foto cargada", use_column_width=True)
         
-    return genai.GenerativeModel('gemini-3.8-flash')
+        if st.button("🚀 Procesar e Ingresar a Base de Datos Central", type="primary"):
+            if not gemini_key:
+                st.error("Falta configurar la clave GEMINI_API_KEY en los Secrets de Streamlit.")
+            else:
+                with st.spinner("La IA de Google está analizando la imagen..."):
+                    try:
+                        genai.configure(api_key=gemini_key)
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        
+                        prompt = """
+                        Analiza este cartel de resultados electorales.
+                        Extrae la siguiente información en formato JSON estricto:
+                        {
+                            "mesa": "numero de mesa o Desconocido",
+                            "departamento": "nombre o Desconocido",
+                            "provincia": "nombre o Desconocido",
+                            "distrito": "nombre o Desconocido",
+                            "tipo_eleccion": "PRESIDENTE / GOBERNADOR REGIONAL, CONSEJERO REGIONAL, ALCALDE PROVINCIAL, o ALCALDE DISTRITAL",
+                            "emitidos": numero_total_votos_emitidos_o_0,
+                            "votos": [
+                                {"partido": "Nombre Partido 1", "votos": numero},
+                                {"partido": "Nombre Partido 2", "votos": numero}
+                            ]
+                        }
+                        Responde UNICAMENTE con el JSON, sin marcas de markdown.
+                        """
+                        
+                        response = model.generate_content([prompt, image])
+                        text_response = response.text.strip().replace("```json", "").replace("```", "")
+                        data = json.loads(text_response)
+                        
+                        eleccion_final = data.get("tipo_eleccion", "GENERAL") if tipo_eleccion.startswith("Automatico") else tipo_eleccion
+                        mesa_num = str(data.get("mesa", "000000"))
+                        clave = f"{mesa_num}_{eleccion_final}"
+                        
+                        conn = sqlite3.connect("votos_electorales_multiples.db")
+                        c = conn.cursor()
+                        
+                        c.execute('''
+                            INSERT INTO actas (clave_unica, mesa, tipo_eleccion, departamento, provincia, distrito, emitidos, personero, fecha_hora)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (clave, mesa_num, eleccion_final, data.get("departamento", ""), data.get("provincia", ""), data.get("distrito", ""), data.get("emitidos", 0), personero, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                        
+                        acta_id = c.lastrowid
+                        
+                        for item in data.get("votos", []):
+                            c.execute('INSERT INTO votos (acta_id, partido, votos) VALUES (?, ?, ?)', (acta_id, item.get("partido", "OTRO"), item.get("votos", 0)))
+                            
+                        conn.commit()
+                        conn.close()
+                        
+                        st.success("¡Acta procesada y guardada exitosamente en la base de datos central!")
+                        st.json(data)
+                        
+                    except sqlite3.IntegrityError:
+                        st.warning("⚠️ Esta mesa y tipo de elección ya fue registrada anteriormente.")
+                    except Exception as e:
+                        st.error(f"Error procesando la imagen: {e}")
 
-# --- 5. SECCIÓN DEL PERSONERO (SIN PREVISUALIZACIÓN NI GUARDADO DE IMAGEN) ---
-st.subheader("📷 Registro de Acta Electoral")
-
-foto = st.file_uploader("Selecciona o toma la foto del acta electoral", type=["jpg", "jpeg", "png"])
-
-if foto is not None:
-    imagen_pil = Image.open(foto)
-    st.info("📷 Foto cargada en memoria RAM. Cero imágenes guardadas.")
-    
-    if st.button("🚀 Procesar Foto y Extraer Todos los Cargos", type="primary"):
-        with st.spinner("Procesando lectura con Gemini..."):
-            try:
-                api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
-                if not api_key:
-                    st.error("Error: No se encontró la GEMINI_API_KEY en los Secrets.")
-                    st.stop()
-                
-                genai.configure(api_key=api_key)
-                img_opt = optimizar_imagen(imagen_pil)
-                
-                prompt = """
-                Analiza esta foto de acta electoral y extrae los votos para los cargos solicitados.
-                Devuelve ÚNICAMENTE un objeto JSON válido con este formato exacto:
-                {
-                    "numero_mesa": "cadena con el numero de mesa",
-                    "pres_reg_p1": entero_numero,
-                    "pres_reg_p2": entero_numero,
-                    "cons_reg_p1": entero_numero,
-                    "cons_reg_p2": entero_numero,
-                    "alc_prov_p1": entero_numero,
-                    "alc_prov_p2": entero_numero,
-                    "alc_dist_p1": entero_numero,
-                    "alc_dist_p2": entero_numero,
-                    "votos_blancos": entero_numero,
-                    "votos_nulos": entero_numero
-                }
-                Si un cargo o valor no es legible o no está presente, asigna 0.
-                """
-                
-                model = obtener_modelo()
-                
-                generation_config = genai.GenerationConfig(
-                    temperature=0.1,
-                    response_mime_type="application/json"
-                )
-                
-                response = model.generate_content([prompt, img_opt], generation_config=generation_config)
-                
-                res_text = response.text.strip()
-                if res_text.startswith("```json"):
-                    res_text = res_text[7:]
-                if res_text.startswith("```"):
-                    res_text = res_text[3:]
-                if res_text.endswith("```"):
-                    res_text = res_text[:-3]
-                
-                datos = json.loads(res_text.strip())
-                
-                c.execute('''
-                    INSERT OR REPLACE INTO actas (
-                        numero_mesa, pres_reg_p1, pres_reg_p2, cons_reg_p1, cons_reg_p2,
-                        alc_prov_p1, alc_prov_p2, alc_dist_p1, alc_dist_p2,
-                        votos_blancos, votos_nulos
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    str(datos.get("numero_mesa", "Desconocida")),
-                    int(datos.get("pres_reg_p1", 0)),
-                    int(datos.get("pres_reg_p2", 0)),
-                    int(datos.get("cons_reg_p1", 0)),
-                    int(datos.get("cons_reg_p2", 0)),
-                    int(datos.get("alc_prov_p1", 0)),
-                    int(datos.get("alc_prov_p2", 0)),
-                    int(datos.get("alc_dist_p1", 0)),
-                    int(datos.get("alc_dist_p2", 0)),
-                    int(datos.get("votos_blancos", 0)),
-                    int(datos.get("votos_nulos", 0))
-                ))
-                conn.commit()
-                
-                st.success(f"✅ ¡Votos de la Mesa N° {datos.get('numero_mesa')} registrados correctamente!")
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error al procesar: {str(e)}")
-
-st.markdown("---")
-
-# --- 6. RESULTADOS CONSOLIDADOS Y CONSULTA INTERACTIVA POR MESA ---
-st.header("📊 Resumen General de Candidaturas")
-
-df = pd.read_sql_query("SELECT * FROM actas", conn)
-
-if not df.empty:
-    st.subheader("🏛️ Totales Acumulados")
-    t1, t2, t3, t4 = st.columns(4)
-    t1.metric("Pres. Regional (P1 / P2)", f"{df['pres_reg_p1'].sum()} | {df['pres_reg_p2'].sum()}")
-    t2.metric("Cons. Regional (P1 / P2)", f"{df['cons_reg_p1'].sum()} | {df['cons_reg_p2'].sum()}")
-    t3.metric("Alc. Provincial (P1 / P2)", f"{df['alc_prov_p1'].sum()} | {df['alc_prov_p2'].sum()}")
-    t4.metric("Alc. Distrital (P1 / P2)", f"{df['alc_dist_p1'].sum()} | {df['alc_dist_p2'].sum()}")
-    
-    st.markdown("---")
-    st.subheader("📋 Mesas Registradas (Haz clic en una mesa para ver todos los cargos)")
-
-    for index, row in df.iterrows():
-        col_btn, col_res, col_f = st.columns([3, 6, 3])
-        
-        if col_btn.button(f"🔍 Mesa N° {row['numero_mesa']}", key=f"btn_{row['numero_mesa']}"):
-            
-            @st.dialog(f"🔎 Desglose Completo: Mesa N° {row['numero_mesa']}")
-            def mostrar_detalle_mesa(mesa_id):
-                c.execute("SELECT * FROM actas WHERE numero_mesa = ?", (mesa_id,))
-                res = c.fetchone()
-                if res:
-                    st.write(f"### Mesa N° {mesa_id}")
-                    
-                    st.subheader("👤 Presidente Regional")
-                    r1, r2 = st.columns(2)
-                    r1.metric("Partido 1", res[1])
-                    r2.metric("Partido 2", res[2])
-                    
-                    st.subheader("🏛️ Consejero Regional")
-                    c1, c2 = st.columns(2)
-                    c1.metric("Partido 1", res[3])
-                    c2.metric("Partido 2", res[4])
-                    
-                    st.subheader("🏢 Alcalde Provincial")
-                    p1, p2 = st.columns(2)
-                    p1.metric("Partido 1", res[5])
-                    p2.metric("Partido 2", res[6])
-                    
-                    st.subheader("🏘️ Alcalde Distrital")
-                    d1, d2 = st.columns(2)
-                    d1.metric("Partido 1", res[7])
-                    d2.metric("Partido 2", res[8])
-                    
-                    st.divider()
-                    b1, b2 = st.columns(2)
-                    b1.metric("Votos Blancos", res[9])
-                    b2.metric("Votos Nulos", res[10])
-                    st.caption(f"Registrado el: {res[11]}")
-            
-            mostrar_detalle_mesa(str(row['numero_mesa']))
-            
-        col_res.write(f"P.Reg: {row['pres_reg_p1']}/{row['pres_reg_p2']} | C.Reg: {row['cons_reg_p1']}/{row['cons_reg_p2']} | A.Prov: {row['alc_prov_p1']}/{row['alc_prov_p2']} | A.Dist: {row['alc_dist_p1']}/{row['alc_dist_p2']}")
-        col_f.caption(f"{row['fecha_registro']}")
-
+# --- VISTA TABLERO CENTRAL ---
 else:
-    st.info("Aún no se han ingresado actas electorales.")
+    st.title("🏛️ Centro Electoral Regional")
+    st.subheader("Tablero Central de Cómputo")
+    
+    conn = sqlite3.connect("votos_electorales_multiples.db")
+    df_actas = pd.read_sql_query("SELECT * FROM actas", conn)
+    df_votos = pd.read_sql_query("SELECT v.*, a.tipo_eleccion FROM votos v JOIN actas a ON v.acta_id = a.id", conn)
+    conn.close()
+    
+    elecciones = ["GOBERNADOR REGIONAL", "CONSEJERO REGIONAL", "ALCALDE PROVINCIAL", "ALCALDE DISTRITAL"]
+    tabs = st.tabs([f"🏛️ {e}" for e in elecciones])
+    
+    for idx, e in enumerate(elecciones):
+        with tabs[idx]:
+            st.header(f"Resultados Consolidados: {e}")
+            df_sub = df_votos[df_votos["tipo_eleccion"].str.contains(e, case=False, na=False)]
+            if not df_sub.empty:
+                res = df_sub.groupby("partido")["votos"].sum().reset_index().sort_values(by="votos", ascending=False)
+                st.dataframe(res, use_container_width=True)
+                st.bar_chart(res.set_index("partido"))
+            else:
+                st.info(f"Aún no hay votos registrados para {e}.")
+
+    st.subheader("📋 Lista General de Mesas y Elecciones Registradas")
+    st.dataframe(df_actas, use_container_width=True)
