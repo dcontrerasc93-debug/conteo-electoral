@@ -6,7 +6,7 @@ import pandas as pd
 conn = sqlite3.connect('votos_electorales_v2.db', check_same_thread=False)
 c = conn.cursor()
 
-# Crear tabla si no existe
+# Crear tabla por si es la primera vez
 c.execute('''
     CREATE TABLE IF NOT EXISTS actas (
         numero_mesa TEXT PRIMARY KEY,
@@ -19,66 +19,59 @@ c.execute('''
 ''')
 conn.commit()
 
-# --- NAVEGACIÓN Y PESTAÑAS ---
+# --- INTERFAZ PRINCIPAL ---
 st.title("🗳️ Sistema de Conteo Electoral en Vivo")
 
 tab1, tab2 = st.tabs(["📊 Suma Total General", "🔍 Consulta por Número de Mesa"])
 
+# Cargar datos existentes
+df = pd.read_sql_query("SELECT * FROM actas", conn)
+
 # ---------------------------------------------------------
-# PESTAÑA 1: SUMA AUTOMÁTICA DE TODAS LAS MESAS
+# PESTAÑA 1: SUMA TOTAL GENERAL
 # ---------------------------------------------------------
 with tab1:
     st.header("Resultados Consolidados")
     
-    # Cargar todos los datos registrados
-    df = pd.read_sql_query("SELECT * FROM actas", conn)
-    
     if not df.empty:
-        # Sumas automáticas directas
-        total_partido_1 = df['votos_partido_1'].sum()
-        total_partido_2 = df['votos_partido_2'].sum()
-        total_blancos = df['votos_blancos'].sum()
-        total_nulos = df['votos_nulos'].sum()
-        total_mesas = len(df)
-
-        # Muestras visuales en tarjetas (Metrics)
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Partido 1", f"{total_partido_1:,}")
-        col2.metric("Partido 2", f"{total_partido_2:,}")
-        col3.metric("Blancos / Nulos", f"{total_blancos + total_nulos:,}")
-        col4.metric("Mesas Procesadas", total_mesas)
-
+        # Detectar columnas numéricas automáticamente para evitar KeyErrors
+        columnas_numericas = df.select_dtypes(include=['number', 'int64', 'float64']).columns.tolist()
+        
+        if columnas_numericas:
+            st.subheader("Totales Acumulados")
+            
+            # Crear métricas dinámicas para cada columna con votos
+            cols = st.columns(min(len(columnas_numericas) + 1, 4))
+            for i, col in enumerate(columnas_numericas):
+                col_idx = i % len(cols)
+                total_col = df[col].sum()
+                # Formatear el nombre de la columna para mostrarlo limpio
+                nombre_limpio = col.replace('_', ' ').title()
+                cols[col_idx].metric(nombre_limpio, f"{int(total_col):,}")
+            
+            # Mostrar total de mesas procesadas
+            st.metric("Total Mesas Procesadas", len(df))
+        
         st.markdown("---")
-        st.subheader("Tabla General de Mesas")
+        st.subheader("Listado Completo de Actas Registradas")
         st.dataframe(df, use_container_width=True)
     else:
-        st.info("Aún no se han registrado actas en el sistema.")
+        st.info("Aún no se han registrado actas en el sistema. Registra la primera foto para ver los resultados.")
 
 # ---------------------------------------------------------
-# PESTAÑA 2: DETALLE Y CONTEO POR NUMERO DE MESA
+# PESTAÑA 2: CONSULTA POR MESA
 # ---------------------------------------------------------
 with tab2:
-    st.header("Buscar Conteo de una Mesa")
+    st.header("Buscar Conteo por Número de Mesa")
     
-    # Obtener lista de mesas registradas para el menú desplegable
-    mesas_disponibles = pd.read_sql_query("SELECT numero_mesa FROM actas", conn)['numero_mesa'].tolist()
-    
-    if mesas_disponibles:
-        # Selector interactivo o ingreso de texto
-        mesa_seleccionada = st.selectbox("Selecciona o busca el número de mesa:", mesas_disponibles)
+    if not df.empty and 'numero_mesa' in df.columns:
+        mesas_disponibles = df['numero_mesa'].astype(str).tolist()
+        mesa_seleccionada = st.selectbox("Selecciona o escribe el número de mesa:", mesas_disponibles)
         
         if mesa_seleccionada:
-            c.execute("SELECT * FROM actas WHERE numero_mesa = ?", (mesa_seleccionada,))
-            acta = c.fetchone()
-            
-            if acta:
-                st.success(f"📌 Detalle de Conteo para la Mesa N° {acta[0]}")
-                
-                m_col1, m_col2, m_col3 = st.columns(3)
-                m_col1.metric("Votos Partido 1", acta[1])
-                m_col2.metric("Votos Partido 2", acta[2])
-                m_col3.metric("Blancos / Nulos", acta[3] + acta[4])
-                
-                st.caption(f"Registrado el: {acta[5]}")
+            datos_mesa = df[df['numero_mesa'].astype(str) == str(mesa_seleccionada)]
+            if not datos_mesa.empty:
+                st.success(f"📌 Detalle de la Mesa N° {mesa_seleccionada}")
+                st.dataframe(datos_mesa, use_container_width=True)
     else:
-        st.warning("No hay mesas registradas para consultar.")
+        st.warning("No hay mesas registradas aún para realizar la búsqueda.")
