@@ -8,7 +8,7 @@ import json
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Conteo Electoral", layout="wide")
-st.title("🗳️ Sistema de Conteo Electoral en Vivo")
+st.title("🗳️ Conteo Electoral ")
 
 # --- 2. BASE DE DATOS LIGERA (SOLO TEXTO Y NÚMEROS) ---
 conn = sqlite3.connect('votos_electorales_v4.db', check_same_thread=False)
@@ -26,7 +26,7 @@ c.execute('''
 ''')
 conn.commit()
 
-# --- 3. OPTIMIZACIÓN DE IMAGEN PARA MINIMIZAR USO DE API ---
+# --- 3. OPTIMIZACIÓN DE IMAGEN PARA API ---
 def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     img = image_pil.copy()
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
@@ -37,17 +37,17 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     buffer.seek(0)
     return Image.open(buffer)
 
-# --- 4. SECCIÓN DEL PERSONERO (SUBIR FOTO Y PROCESAR) ---
+# --- 4. SECCIÓN DEL PERSONERO (SIN MOSTRAR FOTO EN PANTALLA) ---
 st.subheader("📷 Registro de Acta (Personeros)")
 
-foto = st.file_uploader("Toma o sube la foto del acta electoral", type=["jpg", "jpeg", "png"])
+foto = st.file_uploader("Selecciona o toma la foto del acta electoral", type=["jpg", "jpeg", "png"])
 
 if foto is not None:
     imagen_pil = Image.open(foto)
-    st.image(imagen_pil, caption="Vista previa de foto", width=200)
+    st.info("📷 Foto cargada correctamente en el sistema (sin previsualización de imagen).")
     
     if st.button("🚀 Procesar Foto y Guardar Votos", type="primary"):
-        with st.spinner("Procesando datos en 2 segundos..."):
+        with st.spinner("Procesando lectura en 2 segundos..."):
             try:
                 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
                 if not api_key:
@@ -69,14 +69,8 @@ if foto is not None:
                 Si no estás seguro de algún valor pon 0.
                 """
                 
-                # Probar modelos 2.0 / 2.5 / 1.5 según disponibilidad
-                try:
-                    model = genai.GenerativeModel('gemini-2.0-flash')
-                except Exception:
-                    try:
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                    except Exception:
-                        model = genai.GenerativeModel('gemini-1.5-flash-8b')
+                # Modelo oficial vigente
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 generation_config = genai.GenerationConfig(
                     temperature=0.1,
@@ -95,7 +89,6 @@ if foto is not None:
                 
                 datos = json.loads(res_text.strip())
                 
-                # Solo guardamos los números y el ID de mesa en la base de datos
                 c.execute('''
                     INSERT OR REPLACE INTO actas (numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos)
                     VALUES (?, ?, ?, ?, ?)
@@ -116,13 +109,12 @@ if foto is not None:
 
 st.markdown("---")
 
-# --- 5. RESULTADOS CONSOLIDADOS Y CONSULTA INTERACTIVA POR MESA ---
+# --- 5. RESULTADOS CONSOLIDADOS Y CONSULTA POR MESA ---
 st.header("📊 Resultados Consolidados")
 
 df = pd.read_sql_query("SELECT numero_mesa, votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, fecha_registro FROM actas", conn)
 
 if not df.empty:
-    # Totales Globales
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Partido 1", f"{df['votos_partido_1'].sum():,}")
     col2.metric("Partido 2", f"{df['votos_partido_2'].sum():,}")
@@ -132,13 +124,11 @@ if not df.empty:
     st.markdown("---")
     st.subheader("📋 Mesas Registradas (Haz clic para ver el detalle)")
 
-    # Botones por mesa que abren ventana emergente
     for index, row in df.iterrows():
         col_btn, col_p1, col_p2, col_bn, col_f = st.columns([3, 2, 2, 2, 3])
         
         if col_btn.button(f"🔍 Mesa N° {row['numero_mesa']}", key=f"btn_{row['numero_mesa']}"):
             
-            # Modal emergente con los resultados numéricos de esa mesa
             @st.dialog(f"🔎 Conteo Exclusivo: Mesa N° {row['numero_mesa']}")
             def mostrar_detalle_mesa(mesa_id):
                 c.execute("SELECT votos_partido_1, votos_partido_2, votos_blancos, votos_nulos, fecha_registro FROM actas WHERE numero_mesa = ?", (mesa_id,))
@@ -166,4 +156,4 @@ if not df.empty:
         col_f.caption(f"{row['fecha_registro']}")
 
 else:
-    st.info("Aún no se han registrado actas. Sube una foto arriba para comenzar.")
+    st.info("Aún no se han registrado actas. Procesa una foto arriba para comenzar.")
