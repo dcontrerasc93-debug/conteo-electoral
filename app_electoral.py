@@ -57,7 +57,28 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
     buffer.seek(0)
     return Image.open(buffer)
 
-# --- 3. NAVEGACIÓN ---
+# --- 3. SELECCIÓN DE MODELO ACTIVO EN TIEMPO REAL ---
+def obtener_modelo_activo():
+    # Intentar directamente con el modelo requerido por la API
+    try:
+        return genai.GenerativeModel('gemini-3.8-flash')
+    except Exception:
+        pass
+
+    # Consultar modelos habilitados en la API key
+    try:
+        modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        for m in modelos:
+            if 'flash' in m.lower():
+                return genai.GenerativeModel(m)
+        if modelos:
+            return genai.GenerativeModel(modelos[0])
+    except Exception:
+        pass
+
+    return genai.GenerativeModel('gemini-3.8-flash')
+
+# --- 4. NAVEGACIÓN ---
 st.sidebar.title("Navegacion")
 opcion_menu = st.sidebar.radio("Ir a:", ["Enviar Foto (Personero)", "Tablero Central de Computo"])
 
@@ -106,10 +127,7 @@ if opcion_menu == "Enviar Foto (Personero)":
                         Responde UNICAMENTE con el JSON, sin marcas de markdown.
                         """
                         
-                        try:
-                            model = genai.GenerativeModel('gemini-2.5-flash')
-                        except Exception:
-                            model = genai.GenerativeModel('gemini-1.5-flash')
+                        model = obtener_modelo_activo()
                         
                         generation_config = genai.GenerationConfig(
                             temperature=0.1,
@@ -214,32 +232,4 @@ else:
     
     if not df_actas.empty:
         for idx, row in df_actas.iterrows():
-            c1, c2, c3, c4 = st.columns([2, 3, 3, 2])
-            
-            # Botón interactivo por mesa
-            if c1.button(f"Mesa N {row['mesa']}", key=f"mesa_btn_{row['id']}"):
-                
-                @st.dialog(f"Detalle de Acta: Mesa N {row['mesa']}")
-                def mostrar_detalle_acta(acta_id, mesa_num, tipo_e):
-                    st.write(f"### Mesa N {mesa_num}")
-                    st.write(f"**Tipo de Eleccion:** {tipo_e}")
-                    st.write(f"**Ubicacion:** {row['departamento']} - {row['provincia']} - {row['distrito']}")
-                    st.write(f"**Personero:** {row['personero']} | **Fecha:** {row['fecha_hora']}")
-                    st.divider()
-                    
-                    conn_dialog = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
-                    df_votos_acta = pd.read_sql_query("SELECT partido, votos FROM votos WHERE acta_id = ?", conn_dialog, params=(acta_id,))
-                    conn_dialog.close()
-                    
-                    if not df_votos_acta.empty:
-                        st.dataframe(df_votos_acta.sort_values(by="votos", ascending=False), use_container_width=True)
-                    else:
-                        st.info("Sin detalle de votos grabado para esta mesa.")
-                
-                mostrar_detalle_acta(row['id'], row['mesa'], row['tipo_eleccion'])
-                
-            c2.write(f"**Eleccion:** {row['tipo_eleccion']}")
-            c3.write(f"**Lugar:** {row['departamento']} / {row['provincia']} / {row['distrito']}")
-            c4.caption(f"{row['fecha_hora']}")
-    else:
-        st.info("Aun no se han ingresado actas electorales.")
+            c1, c2,
