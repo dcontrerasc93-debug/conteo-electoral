@@ -20,7 +20,7 @@ c.execute('''
 conn.commit()
 
 # --- INTERFAZ PRINCIPAL ---
-st.title("🗳️ Sistema de Conteo Electoral en Vivo")
+st.title("🗳️ Conteo Electoral")
 
 tab1, tab2 = st.tabs(["📊 Suma Total General", "🔍 Consulta por Número de Mesa"])
 
