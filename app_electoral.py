@@ -14,10 +14,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 1. BASE DE DATOS CENTRALIZADA (SQLite) ---
+# --- 1. BASE DE DATOS CENTRALIZADA Y MIGRACIÓN AUTOMÁTICA (SQLite) ---
 def init_db():
     conn = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
     c = conn.cursor()
+    
+    # Crear tablas principales
     c.execute('''
         CREATE TABLE IF NOT EXISTS actas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +29,7 @@ def init_db():
             departamento TEXT,
             provincia TEXT,
             distrito TEXT,
-            emitidos INTEGER,
+            emitidos INTEGER DEFAULT 0,
             personero TEXT,
             fecha_hora TEXT
         )
@@ -41,6 +43,28 @@ def init_db():
             FOREIGN KEY(acta_id) REFERENCES actas(id)
         )
     ''')
+    conn.commit()
+
+    # Migración automática para asegurar que la columna 'emitidos' y otras existan
+    c.execute("PRAGMA table_info(actas)")
+    columnas_existentes = [col[1] for col in c.fetchall()]
+    
+    columnas_requeridas = {
+        "departamento": "TEXT",
+        "provincia": "TEXT",
+        "distrito": "TEXT",
+        "emitidos": "INTEGER DEFAULT 0",
+        "personero": "TEXT",
+        "fecha_hora": "TEXT"
+    }
+
+    for col, tipo in columnas_requeridas.items():
+        if col not in columnas_existentes:
+            try:
+                c.execute(f"ALTER TABLE actas ADD COLUMN {col} {tipo}")
+            except Exception:
+                pass
+
     conn.commit()
     conn.close()
 
@@ -59,13 +83,11 @@ def optimizar_imagen(image_pil, max_size=(1280, 1280), quality=75):
 
 # --- 3. SELECCIÓN DE MODELO ACTIVO EN TIEMPO REAL ---
 def obtener_modelo_activo():
-    # Intentar directamente con el modelo requerido por la API
     try:
         return genai.GenerativeModel('gemini-3.8-flash')
     except Exception:
         pass
 
-    # Consultar modelos habilitados en la API key
     try:
         modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         for m in modelos:
@@ -232,4 +254,31 @@ else:
     
     if not df_actas.empty:
         for idx, row in df_actas.iterrows():
-            c1, c2,
+            c1, c2, c3, c4 = st.columns([2, 3, 3, 2])
+            
+            if c1.button(f"Mesa N {row['mesa']}", key=f"mesa_btn_{row['id']}"):
+                
+                @st.dialog(f"Detalle de Acta: Mesa N {row['mesa']}")
+                def mostrar_detalle_acta(acta_id, mesa_num, tipo_e):
+                    st.write(f"### Mesa N {mesa_num}")
+                    st.write(f"**Tipo de Eleccion:** {tipo_e}")
+                    st.write(f"**Ubicacion:** {row.get('departamento', '')} - {row.get('provincia', '')} - {row.get('distrito', '')}")
+                    st.write(f"**Personero:** {row.get('personero', '')} | **Fecha:** {row.get('fecha_hora', '')}")
+                    st.divider()
+                    
+                    conn_dialog = sqlite3.connect("votos_electorales_multiples.db", check_same_thread=False)
+                    df_votos_acta = pd.read_sql_query("SELECT partido, votos FROM votos WHERE acta_id = ?", conn_dialog, params=(acta_id,))
+                    conn_dialog.close()
+                    
+                    if not df_votos_acta.empty:
+                        st.dataframe(df_votos_acta.sort_values(by="votos", ascending=False), use_container_width=True)
+                    else:
+                        st.info("Sin detalle de votos grabado para esta mesa.")
+                
+                mostrar_detalle_acta(row['id'], row['mesa'], row['tipo_eleccion'])
+                
+            c2.write(f"**Eleccion:** {row['tipo_eleccion']}")
+            c3.write(f"**Lugar:** {row.get('departamento', '')} / {row.get('provincia', '')} / {row.get('distrito', '')}")
+            c4.caption(f"{row.get('fecha_hora', '')}")
+    else:
+        st.info("Aun no se han ingresado actas electorales.")
